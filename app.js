@@ -251,7 +251,6 @@
       var li = document.querySelector('.clue-panel li[data-num="' + entry.num + '"][data-dir="' + entry.dir + '"]');
       if (li) {
         li.classList.add('active-clue');
-        li.scrollIntoView({ block: 'nearest' });
       }
       els.currentClueText.textContent = entry.num + (entry.dir === 'across' ? ' Across' : ' Down') + '. ' + entry.clue;
     }
