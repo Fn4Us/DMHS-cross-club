@@ -57,12 +57,37 @@
     els.loadError = document.getElementById('loadError');
     els.appRoot = document.getElementById('appRoot');
     els.dropdowns = Array.prototype.slice.call(document.querySelectorAll('.dropdown'));
+
+    // The hidden letter input sits exactly on top of the selected cell so
+    // it can capture keystrokes. If it can receive pointer events, a
+    // second click on the same square lands on the *input* instead of the
+    // cell underneath, which silently swallows the click. Making it
+    // click-through lets every click always reach the .cell element.
+    els.letterInput.style.pointerEvents = 'none';
   }
 
   function showLoadError(err) {
     console.error(err);
     els.loadError.hidden = false;
     els.loadError.textContent = 'Couldn\u2019t load this week\u2019s puzzle. ' + (err && err.message ? err.message : '');
+  }
+
+  // -----------------------------------------------------------------------
+  // Scroll helpers
+  // -----------------------------------------------------------------------
+  // Repositioning or focusing the hidden letter input can trigger some
+  // browsers (notably Safari, which doesn't honor focus()'s preventScroll
+  // option) to auto-scroll the page to keep it in view. That makes the
+  // whole page jump around on click or arrow-key navigation. We snapshot
+  // the scroll position and restore it immediately, and again on the next
+  // frame in case the browser scrolls asynchronously.
+  function preserveScroll(fn) {
+    var x = window.scrollX, y = window.scrollY;
+    fn();
+    if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+    requestAnimationFrame(function () {
+      if (window.scrollX !== x || window.scrollY !== y) window.scrollTo(x, y);
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -237,17 +262,21 @@
   function positionInput() {
     var cellEl = els.grid.children[state.currentIndex];
     if (!cellEl) return;
-    var gridRect = els.grid.getBoundingClientRect();
-    var cellRect = cellEl.getBoundingClientRect();
-    els.letterInput.style.left = (cellRect.left - gridRect.left) + 'px';
-    els.letterInput.style.top = (cellRect.top - gridRect.top) + 'px';
-    els.letterInput.style.width = cellRect.width + 'px';
-    els.letterInput.style.height = cellRect.height + 'px';
+    preserveScroll(function () {
+      var gridRect = els.grid.getBoundingClientRect();
+      var cellRect = cellEl.getBoundingClientRect();
+      els.letterInput.style.left = (cellRect.left - gridRect.left) + 'px';
+      els.letterInput.style.top = (cellRect.top - gridRect.top) + 'px';
+      els.letterInput.style.width = cellRect.width + 'px';
+      els.letterInput.style.height = cellRect.height + 'px';
+    });
   }
 
   function focusInput() {
     els.letterInput.value = '';
-    els.letterInput.focus({ preventScroll: true });
+    preserveScroll(function () {
+      els.letterInput.focus({ preventScroll: true });
+    });
   }
 
   function moveArrow(key) {
@@ -272,12 +301,15 @@
     updateSelectionUI();
   }
 
+  // Advances to the next (or previous) clue *in the current direction only*.
+  // Finishing an across entry moves to the next across entry, never a down
+  // one, and vice versa; the list wraps around at the end.
   function jumpClue(delta) {
     var entry = getEntry(state.currentIndex, state.direction);
-    var seq = puzzle.sequence;
-    var pos = seq.indexOf(entry);
+    var list = state.direction === 'across' ? puzzle.across : puzzle.down;
+    var pos = list.indexOf(entry);
     if (pos === -1) pos = 0;
-    var next = seq[(pos + delta + seq.length) % seq.length];
+    var next = list[(pos + delta + list.length) % list.length];
     state.direction = next.dir;
     state.currentIndex = firstEmptyCellIn(next);
     updateSelectionUI();
