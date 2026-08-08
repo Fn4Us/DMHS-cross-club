@@ -284,13 +284,23 @@
     var dc = key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
 
     state.direction = axis;
-    var r = Math.floor(state.currentIndex / puzzle.width) + dr;
-    var c = (state.currentIndex % puzzle.width) + dc;
-    if (r < 0 || r >= puzzle.height || c < 0 || c >= puzzle.width) { updateSelectionUI(); return; }
-    var idx = r * puzzle.width + c;
-    if (state.cells[idx].black) { updateSelectionUI(); return; }
-    state.currentIndex = idx;
-    updateSelectionUI();
+    var r = Math.floor(state.currentIndex / puzzle.width);
+    var c = state.currentIndex % puzzle.width;
+
+    // Keep stepping in the pressed direction past any black squares until
+    // a white square is found, or the edge of the grid is reached (in
+    // which case the selection just stays put).
+    while (true) {
+      r += dr;
+      c += dc;
+      if (r < 0 || r >= puzzle.height || c < 0 || c >= puzzle.width) { updateSelectionUI(); return; }
+      var idx = r * puzzle.width + c;
+      if (!state.cells[idx].black) {
+        state.currentIndex = idx;
+        updateSelectionUI();
+        return;
+      }
+    }
   }
 
   function moveHomeEnd(toEnd) {
@@ -300,17 +310,47 @@
     updateSelectionUI();
   }
 
-  // Advances to the next (or previous) clue *in the current direction only*.
-  // Finishing an across entry moves to the next across entry, never a down
-  // one, and vice versa; the list wraps around at the end.
+  function isEntryComplete(entry) {
+    return entry.cells.every(function (idx) { return !!state.cells[idx].letter; });
+  }
+
+  // Searches `list` starting `delta` steps from `fromPos`, wrapping around,
+  // and returns the first entry that still has an empty cell. Returns null
+  // if every entry in the list is already filled in.
+  function firstIncompleteInList(list, fromPos, delta) {
+    for (var i = 1; i <= list.length; i++) {
+      var idx = (((fromPos + delta * i) % list.length) + list.length) % list.length;
+      if (!isEntryComplete(list[idx])) return list[idx];
+    }
+    return null;
+  }
+
+  // Advances to the next (or previous) *incomplete* clue in the current
+  // direction, wrapping around within that direction. Finishing an across
+  // entry moves to the next incomplete across entry, never a down one (and
+  // vice versa) — unless every entry in the current direction is already
+  // filled in, in which case it hops over to the first incomplete entry of
+  // the other direction (always searched from the top of that list).
   function jumpClue(delta) {
     var entry = getEntry(state.currentIndex, state.direction);
     var list = state.direction === 'across' ? puzzle.across : puzzle.down;
     var pos = list.indexOf(entry);
     if (pos === -1) pos = 0;
-    var next = list[(pos + delta + list.length) % list.length];
-    state.direction = next.dir;
-    state.currentIndex = firstEmptyCellIn(next);
+
+    var next = firstIncompleteInList(list, pos, delta);
+    if (next) {
+      state.currentIndex = firstEmptyCellIn(next);
+      updateSelectionUI();
+      return;
+    }
+
+    var otherDir = state.direction === 'across' ? 'down' : 'across';
+    var otherList = otherDir === 'across' ? puzzle.across : puzzle.down;
+    var otherNext = firstIncompleteInList(otherList, -1, 1);
+    if (otherNext) {
+      state.direction = otherDir;
+      state.currentIndex = firstEmptyCellIn(otherNext);
+    }
     updateSelectionUI();
   }
 
@@ -417,7 +457,10 @@
     pauseTimer(false);
     var usedHelp = state.cells.some(function (c) { return c.revealed; });
     els.solvedBanner.hidden = false;
-    els.solvedBanner.textContent = (usedHelp ? 'Completed with help \u2014 ' : '\ud83c\udf89 Solved! \u2014 ') + formatTime(state.timer.elapsed);
+    els.solvedBanner.classList.toggle('with-help', usedHelp);
+    els.solvedBanner.textContent = (usedHelp
+      ? '\ud83d\udc4d Nice work \u2014 you finished it (with a little help) in '
+      : '\ud83c\udf89 Congratulations \u2014 you solved it in ') + formatTime(state.timer.elapsed) + '!';
   }
 
   function formatTime(sec) {
