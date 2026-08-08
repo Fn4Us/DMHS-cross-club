@@ -452,6 +452,9 @@ button {
   padding: 1rem;
   z-index: 100;
 }
+.modal-backdrop[hidden] {
+  display: none;
+}
 .modal {
   position: relative;
   background: var(--white);
