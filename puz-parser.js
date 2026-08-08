@@ -1,204 +1,224 @@
 (function (global) {
   'use strict';
 
-  // -------------------------------------------------------------------
+  // =========================================================================
   // PuzParser
   //
-  // Parses the classic Across Lite ".puz" binary crossword format into
+  // Parses the Across Lite ".puz" binary crossword format and turns it into
   // the plain-object shape app.js expects:
   //
   //   {
+  //     title, author, notes,
   //     width, height,
-  //     title, author, copyright, notes,
-  //     solution,      // string, length width*height, '.' = black square
-  //     cellNumber,    // array, length width*height, clue number or 0
-  //     across, down,  // arrays of { num, dir, clue, cell, cells: [idx,...] }
-  //     acrossAt, downAt, // arrays, length width*height, entry object or null
-  //     sequence       // ordered list of every entry (across+down) in the
-  //                    // order solving normally visits them, each with
-  //                    // { cell, dir, ... } for tab/enter navigation
+  //     solution,              // string, length width*height, '.' = black
+  //     cellNumber,            // array, cellNumber[i] = clue number or 0
+  //     across, down,          // arrays of entries, in grid order
+  //     acrossAt, downAt,      // arrays indexed by cell -> entry (or undefined)
+  //     sequence               // all entries in natural tab/next-clue order
   //   }
   //
-  // Reference: the (unofficial but well-documented) .puz format used by
-  // Across Lite. See https://github.com/alexdej/puzpy and similar
-  // projects for the layout this is based on.
-  // -------------------------------------------------------------------
-
-  var HEADER_OFFSET = 0x00;
-  var CHECKSUM_OFFSET = 0x00;
-  var MAGIC_OFFSET = 0x02;
-  var MAGIC = 'ACROSS&DOWN\0';
-  var FILE_CHECKSUM_LEN = 2;
-
-  // Header layout starting at byte 0x00 (all little-endian):
-  //   0x00  2   overall checksum
+  // where an "entry" looks like:
+  //   { num, dir: 'across'|'down', clue, cells: [idx, idx, ...], cell: idx }
+  //
+  // Reference for the file layout: the well-documented (if unofficial)
+  // Across Lite .puz format. We only implement what's needed to *solve* a
+  // standard puzzle -- we don't support scrambled/locked solutions or rebus
+  // squares (GRBS/RTBL extra sections), and we ignore the saved fill state
+  // stored in the file since every session starts from a blank grid.
+  //
+  //   0x00  2   overall file checksum
   //   0x02  12  magic "ACROSS&DOWN\0"
-  //   0x0E  2   cib checksum
-  //   0x10  8   masked low checksums
-  //   0x18  8   masked high checksums
-  //   0x20  4   version string, e.g. "1.3\0"
-  //   0x24  2   reserved1 (unused, sometimes garbage)
-  //   0x26  2   scrambled checksum
-  //   0x28  12  reserved2
-  //   0x34  1   width
-  //   0x35  1   height
-  //   0x36  2   number of clues
-  //   0x38  2   unknown bitmask (puzzle type)
-  //   0x3A  2   scrambled tag (0 = not scrambled)
-  //   0x3C  ... solution (width*height bytes)
-  //            grid (width*height bytes)
-  //            strings: title\0 author\0 copyright\0 clue1\0 clue2\0 ... notes\0
+  //   0x0E  2   CIB checksum
+  //   0x10  4   masked low checksums
+  //   0x14  4   masked high checksums
+  //   0x18  4   version string, e.g. "1.3\0"
+  //   0x1C  2   reserved1c
+  //   0x1E  2   scrambled checksum
+  //   0x20  12  reserved20
+  //   0x2C  1   width
+  //   0x2D  1   height
+  //   0x2E  2   number of clues
+  //   0x30  2   unknown bitmask (puzzle type)
+  //   0x32  2   scrambled tag (0 = not scrambled)
+  //   0x34  ... solution (width*height bytes)
+  //             saved fill state (width*height bytes) -- ignored
+  //             strings: title\0 author\0 copyright\0 clue1\0 ... notes\0
+  // =========================================================================
 
-  function PuzParseError(msg) {
-    this.name = 'PuzParseError';
-    this.message = msg;
-  }
-  PuzParseError.prototype = Object.create(Error.prototype);
+  var HEADER_LEN = 0x34; // 52 bytes before the solution grid begins
 
   function parse(arrayBuffer) {
     var bytes = new Uint8Array(arrayBuffer);
     var view = new DataView(arrayBuffer);
 
-    // Locate the magic string. Normally at 0x02, but some files carry
-    // extra leading bytes, so scan defensively rather than assume.
-    var magicOffset = findMagic(bytes);
-    if (magicOffset === -1) {
-      throw new PuzParseError('This doesn\u2019t look like a .puz file (missing ACROSS&DOWN signature).');
-    }
-    // Re-base everything relative to where the magic actually starts,
-    // in case there is leading padding before the header.
-    var base = magicOffset - MAGIC_OFFSET;
-
-    var width = bytes[base + 0x34];
-    var height = bytes[base + 0x35];
-    var numClues = view.getUint16(base + 0x36, true);
-    var scrambledTag = view.getUint16(base + 0x3A, true);
-
-    if (!width || !height || width > 100 || height > 100) {
-      throw new PuzParseError('Puzzle header looks corrupted (bad grid dimensions).');
+    if (bytes.length < HEADER_LEN + 2) {
+      throw new Error('File is too small to be a .puz crossword.');
     }
 
-    var gridSize = width * height;
-    var solutionStart = base + 0x34 + 8; // 0x3C
-    var gridStart = solutionStart + gridSize;
-    var stringsStart = gridStart + gridSize;
-
-    var solutionBytes = bytes.subarray(solutionStart, solutionStart + gridSize);
-    if (solutionBytes.length < gridSize) {
-      throw new PuzParseError('Puzzle file is truncated (solution grid cut off).');
+    // ---- Magic string, offset 0x02, 11 bytes + NUL -----------------------
+    var magic = decodeAscii(bytes, 0x02, 0x0D);
+    if (magic !== 'ACROSS&DOWN') {
+      throw new Error('This doesn\u2019t look like a .puz crossword file.');
     }
-    var solution = bytesToLatin1(solutionBytes);
 
+    // ---- Common Info Block, offset 0x2C, 8 bytes --------------------------
+    var width = view.getUint8(0x2C);
+    var height = view.getUint8(0x2D);
+    var numClues = view.getUint16(0x2E, true);
+    var scrambledTag = view.getUint16(0x32, true);
+
+    if (!width || !height) {
+      throw new Error('Puzzle grid dimensions are missing or invalid.');
+    }
     if (scrambledTag !== 0) {
-      throw new PuzParseError('This puzzle is scrambled/locked and can\u2019t be opened here.');
+      throw new Error('This puzzle\u2019s solution is locked/scrambled and can\u2019t be loaded here.');
     }
 
-    // Pull the null-terminated string section: title, author, copyright,
-    // then `numClues` clue strings in file order, then an optional notes
-    // string.
-    var strings = readNullTerminatedStrings(bytes, stringsStart, numClues + 4);
-    var title = strings[0] || '';
-    var author = strings[1] || '';
-    var copyright = strings[2] || '';
-    var clueTexts = strings.slice(3, 3 + numClues);
-    var notes = strings[3 + numClues] || '';
+    var cellCount = width * height;
+    var gridBytesNeeded = HEADER_LEN + cellCount * 2; // solution + fill state
+    if (bytes.length < gridBytesNeeded) {
+      throw new Error('Puzzle file is truncated \u2014 the grid data is incomplete.');
+    }
 
-    // Determine which cells start a numbered entry (across and/or down),
-    // Across Lite numbering rules: a cell gets a number if it's not
-    // black and (it starts an across entry OR it starts a down entry).
-    var cellNumber = new Array(gridSize).fill(0);
-    var acrossStarts = []; // { index }
-    var downStarts = [];
+    // ---- Solution + (ignored) saved fill state -----------------------------
+    var solution = readGridString(bytes, HEADER_LEN, cellCount).toUpperCase();
+    var cursor = HEADER_LEN + cellCount; // skip solution
+    cursor += cellCount;                 // skip saved player-state grid
+
+    if (solution.length !== cellCount) {
+      throw new Error('Puzzle solution data doesn\u2019t match the grid size.');
+    }
+
+    // ---- Strings section: title, author, copyright, clues..., notes -------
+    var titleRes = readCString(bytes, cursor); cursor = titleRes.next;
+    var authorRes = readCString(bytes, cursor); cursor = authorRes.next;
+    var copyrightRes = readCString(bytes, cursor); cursor = copyrightRes.next;
+
+    var clues = [];
+    for (var i = 0; i < numClues; i++) {
+      if (cursor > bytes.length) {
+        throw new Error('Puzzle file is missing clue text \u2014 it may be corrupted.');
+      }
+      var clueRes = readCString(bytes, cursor);
+      clues.push(clueRes.value);
+      cursor = clueRes.next;
+    }
+
+    var notes = '';
+    if (cursor <= bytes.length) {
+      notes = readCString(bytes, cursor).value;
+    }
+
+    // ---- Build the grid layout: numbering, across/down entries ------------
+    var built = buildEntries(solution, width, height, clues);
+
+    return {
+      title: titleRes.value,
+      author: authorRes.value,
+      notes: notes,
+      width: width,
+      height: height,
+      solution: solution,
+      cellNumber: built.cellNumber,
+      across: built.across,
+      down: built.down,
+      acrossAt: built.acrossAt,
+      downAt: built.downAt,
+      sequence: built.sequence
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Grid numbering + across/down entry construction.
+  //
+  // Standard crossword numbering: scan the grid left-to-right, top-to-bottom.
+  // A cell starts a new number if it's white and either:
+  //   - it begins an across entry (nothing to its left, something to its
+  //     right), and/or
+  //   - it begins a down entry (nothing above it, something below it)
+  // Clue text is consumed from the flat `clues` array in the same order:
+  // for each numbered cell, across (if it starts one) is taken before down.
+  // -------------------------------------------------------------------------
+  function buildEntries(solution, width, height, clues) {
+    var cellNumber = new Array(solution.length);
+    for (var z = 0; z < cellNumber.length; z++) cellNumber[z] = 0;
+
+    var across = [];
+    var down = [];
+    var acrossAt = new Array(solution.length);
+    var downAt = new Array(solution.length);
+    var sequence = [];
     var num = 0;
+    var clueIdx = 0;
+
+    function isBlack(idx) { return solution.charAt(idx) === '.'; }
 
     for (var r = 0; r < height; r++) {
       for (var c = 0; c < width; c++) {
         var idx = r * width + c;
-        if (solution.charAt(idx) === '.') continue;
+        if (isBlack(idx)) continue;
 
-        var startsAcross = (c === 0 || solution.charAt(idx - 1) === '.') &&
-          (c + 1 < width && solution.charAt(idx + 1) !== '.');
-        var startsDown = (r === 0 || solution.charAt(idx - width) === '.') &&
-          (r + 1 < height && solution.charAt(idx + width) !== '.');
+        var startsAcross = (c === 0 || isBlack(idx - 1)) &&
+          (c < width - 1 && !isBlack(idx + 1));
+        var startsDown = (r === 0 || isBlack(idx - width)) &&
+          (r < height - 1 && !isBlack(idx + width));
 
-        if (startsAcross || startsDown) {
-          num++;
-          cellNumber[idx] = num;
-          if (startsAcross) acrossStarts.push(idx);
-          if (startsDown) downStarts.push(idx);
-        }
-      }
-    }
+        if (!startsAcross && !startsDown) continue;
 
-    if (acrossStarts.length + downStarts.length !== clueTexts.length) {
-      // Not necessarily fatal for our purposes (some malformed files
-      // pad clues), but worth surfacing rather than silently misaligning
-      // clue text to entries.
-      console.warn(
-        '[puz-parser] clue count mismatch: grid implies ' +
-        (acrossStarts.length + downStarts.length) + ' clues, file lists ' + clueTexts.length + '.'
-      );
-    }
+        num++;
+        cellNumber[idx] = num;
 
-    // Clues in a .puz file are stored in the order the numbered squares
-    // appear, reading left-to-right/top-to-bottom, with across clues
-    // before down clues whenever a cell starts both.
-    var clueQueue = clueTexts.slice();
-    var across = [];
-    var down = [];
-    var acrossAt = new Array(gridSize).fill(null);
-    var downAt = new Array(gridSize).fill(null);
-
-    for (var r2 = 0; r2 < height; r2++) {
-      for (var c2 = 0; c2 < width; c2++) {
-        var idx2 = r2 * width + c2;
-        if (!cellNumber[idx2]) continue;
-
-        var isAcrossStart = acrossStarts.indexOf(idx2) !== -1;
-        var isDownStart = downStarts.indexOf(idx2) !== -1;
-
-        if (isAcrossStart) {
-          var acrossCells = collectEntryCells(solution, width, height, idx2, 'across');
+        if (startsAcross) {
+          var acrossCells = [];
+          var ac = idx;
+          while (ac < solution.length && Math.floor(ac / width) === r && !isBlack(ac)) {
+            acrossCells.push(ac);
+            ac++;
+          }
+          if (clueIdx >= clues.length) {
+            throw new Error('Puzzle file has fewer clues than the grid needs \u2014 it may be corrupted.');
+          }
           var acrossEntry = {
-            num: cellNumber[idx2],
+            num: num,
             dir: 'across',
-            clue: clueQueue.shift() || '',
-            cell: idx2,
-            cells: acrossCells
+            clue: clues[clueIdx++],
+            cells: acrossCells,
+            cell: idx
           };
           across.push(acrossEntry);
-          acrossCells.forEach(function (ci) { acrossAt[ci] = acrossEntry; });
+          sequence.push(acrossEntry);
+          for (var ai = 0; ai < acrossCells.length; ai++) acrossAt[acrossCells[ai]] = acrossEntry;
         }
-        if (isDownStart) {
-          var downCells = collectEntryCells(solution, width, height, idx2, 'down');
+
+        if (startsDown) {
+          var downCells = [];
+          var dc = idx;
+          while (dc < solution.length && !isBlack(dc)) {
+            downCells.push(dc);
+            dc += width;
+          }
+          if (clueIdx >= clues.length) {
+            throw new Error('Puzzle file has fewer clues than the grid needs \u2014 it may be corrupted.');
+          }
           var downEntry = {
-            num: cellNumber[idx2],
+            num: num,
             dir: 'down',
-            clue: clueQueue.shift() || '',
-            cell: idx2,
-            cells: downCells
+            clue: clues[clueIdx++],
+            cells: downCells,
+            cell: idx
           };
           down.push(downEntry);
-          downCells.forEach(function (ci) { downAt[ci] = downEntry; });
+          sequence.push(downEntry);
+          for (var di = 0; di < downCells.length; di++) downAt[downCells[di]] = downEntry;
         }
       }
     }
 
-    // Build the natural tab/enter navigation order: every across entry
-    // then every down entry, both already in grid (reading) order, then
-    // merge by clue number so navigation alternates sensibly the way
-    // solvers expect (all acrosses then all downs is the conventional
-    // .puz solving order used by Across Lite / NYT-style apps).
-    var sequence = across.concat(down);
+    if (!sequence.length) {
+      throw new Error('Couldn\u2019t find any across or down entries in this puzzle.');
+    }
 
     return {
-      width: width,
-      height: height,
-      title: cleanString(title),
-      author: cleanString(author),
-      copyright: cleanString(copyright),
-      notes: cleanString(notes),
-      solution: solution,
       cellNumber: cellNumber,
       across: across,
       down: down,
@@ -208,80 +228,53 @@
     };
   }
 
-  function collectEntryCells(solution, width, height, startIdx, dir) {
-    var cells = [];
-    if (dir === 'across') {
-      var r = Math.floor(startIdx / width);
-      var c = startIdx % width;
-      while (c < width && solution.charAt(r * width + c) !== '.') {
-        cells.push(r * width + c);
-        c++;
-      }
-    } else {
-      var c2 = startIdx % width;
-      var r2 = Math.floor(startIdx / width);
-      while (r2 < height && solution.charAt(r2 * width + c2) !== '.') {
-        cells.push(r2 * width + c2);
-        r2++;
-      }
-    }
-    return cells;
+  // -------------------------------------------------------------------------
+  // Byte helpers
+  // -------------------------------------------------------------------------
+
+  // Grid bytes (solution / fill-state strings) are always plain ASCII
+  // ('.', '-', A-Z, occasional rebus punctuation) -- one byte per cell,
+  // so a straight char-code read is safe regardless of the file's text
+  // encoding.
+  function readGridString(bytes, start, length) {
+    var out = '';
+    for (var i = 0; i < length; i++) out += String.fromCharCode(bytes[start + i]);
+    return out;
   }
 
-  function findMagic(bytes) {
-    var magicBytes = [];
-    for (var i = 0; i < MAGIC.length; i++) magicBytes.push(MAGIC.charCodeAt(i));
-    var limit = Math.min(bytes.length - magicBytes.length, 64); // magic should be near the start
-    for (var offset = 0; offset <= limit; offset++) {
-      var match = true;
-      for (var j = 0; j < magicBytes.length; j++) {
-        if (bytes[offset + j] !== magicBytes[j]) { match = false; break; }
-      }
-      if (match) return offset;
-    }
-    return -1;
+  function decodeAscii(bytes, start, end) {
+    var out = '';
+    for (var i = start; i < end && bytes[i] !== 0; i++) out += String.fromCharCode(bytes[i]);
+    return out;
   }
 
-  // Reads up to `count` NUL-terminated strings starting at `offset`,
-  // decoding each as Latin-1/CP1252-ish bytes (the .puz format doesn't
-  // guarantee UTF-8; falling back to per-byte decoding keeps accented
-  // characters from throwing, matching how most puz readers behave).
-  function readNullTerminatedStrings(bytes, offset, count) {
-    var result = [];
-    var pos = offset;
-    for (var i = 0; i < count; i++) {
-      if (pos > bytes.length) { result.push(''); continue; }
-      var start = pos;
-      while (pos < bytes.length && bytes[pos] !== 0) pos++;
-      result.push(bytesToLatin1(bytes.subarray(start, pos)));
-      pos++; // skip the NUL terminator
+  // Title/author/clue/notes text can contain accented characters. Puzzle
+  // files in the wild are inconsistently encoded (older ones are
+  // Windows-1252 / Latin-1, newer export tools often use UTF-8), so try
+  // UTF-8 first and fall back to Windows-1252 if that produced
+  // replacement-character mangling.
+  function decodeText(bytes, start, end) {
+    var slice = bytes.subarray(start, end);
+    if (typeof TextDecoder === 'undefined') {
+      return decodeAscii(bytes, start, end);
     }
-    return result;
-  }
-
-  function bytesToLatin1(byteArray) {
-    var s = '';
-    for (var i = 0; i < byteArray.length; i++) {
-      s += String.fromCharCode(byteArray[i]);
-    }
-    // Most modern .puz files are actually UTF-8 flagged via a GEXT/other
-    // extra section or just plain ASCII; attempt a UTF-8 re-decode when
-    // it looks safe, otherwise keep the Latin-1 fallback.
+    var utf8 = new TextDecoder('utf-8').decode(slice);
+    if (utf8.indexOf('\uFFFD') === -1) return utf8;
     try {
-      var decoded = decodeURIComponent(escape(s));
-      return decoded;
+      return new TextDecoder('windows-1252').decode(slice);
     } catch (e) {
-      return s;
+      return utf8;
     }
   }
 
-  function cleanString(s) {
-    return (s || '').replace(/\u0000+$/, '').trim();
+  // Reads one NUL-terminated string starting at `offset`.
+  // Returns { value, next } where `next` is the offset just past the NUL.
+  function readCString(bytes, offset) {
+    var end = offset;
+    while (end < bytes.length && bytes[end] !== 0) end++;
+    var value = decodeText(bytes, offset, end);
+    return { value: value, next: end + 1 };
   }
 
-  global.PuzParser = {
-    parse: parse,
-    PuzParseError: PuzParseError
-  };
-
+  global.PuzParser = { parse: parse };
 })(typeof window !== 'undefined' ? window : this);
