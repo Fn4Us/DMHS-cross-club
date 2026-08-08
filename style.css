@@ -118,6 +118,9 @@ button {
   padding: 0 1.25rem;
   align-items: start;
 }
+.layout[hidden] {
+  display: none;
+}
 
 .puzzle-area {
   min-width: 0;
@@ -341,6 +344,9 @@ button {
   align-items: center;
   justify-content: center;
   border-radius: 2px;
+}
+.pause-overlay[hidden] {
+  display: none;
 }
 .pause-overlay button {
   background: var(--maroon-700);
