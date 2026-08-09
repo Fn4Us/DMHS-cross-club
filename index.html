@@ -67,6 +67,14 @@
         <div class="pause-overlay" id="pauseOverlay" hidden>
           <button id="resumeBtn">&#9654; Resume</button>
         </div>
+        <div class="modal-backdrop congrats-backdrop" id="congratsModal" hidden>
+          <div class="modal congrats-modal">
+            <button class="modal-close" id="closeCongrats" aria-label="Close">&times;</button>
+            <p class="congrats-emoji" aria-hidden="true">&#127881;</p>
+            <h2>Congratulations!</h2>
+            <p id="congratsMessage">You solved this week&rsquo;s puzzle.</p>
+          </div>
+        </div>
       </div>
 
       <div class="clue-panel">
@@ -81,8 +89,6 @@
       </div>
     </div>
 
-    <p class="solved-banner" id="solvedBanner" hidden></p>
-
   </main>
 
   <aside class="about-box">
@@ -93,7 +99,7 @@
 
 </div>
 
-<footer class="site-footer">DMHS Newsletter Crossword &middot; a new puzzle each issue</footer>
+<footer class="site-footer">Created by the DMHS Cruciverbalists' Club</footer>
 
 <div class="modal-backdrop" id="helpModal" hidden>
   <div class="modal">
