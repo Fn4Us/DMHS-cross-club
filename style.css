@@ -358,20 +358,34 @@ button {
   cursor: pointer;
 }
 
-.solved-banner {
-  margin-top: 0.65rem;
-  background: var(--maroon-900);
-  color: var(--white);
+/* The congrats popup overlays just the crossword grid (like the pause
+   overlay), rather than the whole viewport like the help modal does. */
+.congrats-backdrop {
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  padding: 1rem;
+}
+
+.congrats-modal {
   text-align: center;
-  padding: 0.75rem 0.9rem;
-  border-radius: var(--radius);
-  font-weight: 600;
-  font-size: 1.05rem;
-  box-shadow: 0 6px 18px rgba(70, 22, 26, 0.28);
   animation: solved-pop 460ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.solved-banner.with-help {
-  background: var(--maroon-700);
+.congrats-modal.with-help {
+  --congrats-accent: var(--maroon-700);
+}
+.congrats-emoji {
+  margin: 0 0 0.25rem;
+  font-size: 2.4rem;
+  line-height: 1;
+}
+.congrats-modal h2 {
+  color: var(--maroon-900);
+}
+.congrats-modal p#congratsMessage {
+  font-size: 0.95rem;
+  color: var(--grey-700);
+  margin-bottom: 0;
 }
 
 @keyframes solved-pop {
