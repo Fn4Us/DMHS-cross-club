@@ -53,7 +53,9 @@
     els.helpBtn = document.getElementById('helpBtn');
     els.helpModal = document.getElementById('helpModal');
     els.closeHelp = document.getElementById('closeHelp');
-    els.solvedBanner = document.getElementById('solvedBanner');
+    els.congratsModal = document.getElementById('congratsModal');
+    els.closeCongrats = document.getElementById('closeCongrats');
+    els.congratsMessage = document.getElementById('congratsMessage');
     els.loadError = document.getElementById('loadError');
     els.appRoot = document.getElementById('appRoot');
     els.dropdowns = Array.prototype.slice.call(document.querySelectorAll('.dropdown'));
@@ -456,11 +458,11 @@
     state.solved = true;
     pauseTimer(false);
     var usedHelp = state.cells.some(function (c) { return c.revealed; });
-    els.solvedBanner.hidden = false;
-    els.solvedBanner.classList.toggle('with-help', usedHelp);
-    els.solvedBanner.textContent = (usedHelp
-      ? '\ud83d\udc4d Nice work \u2014 you finished it (with a little help) in '
-      : '\ud83c\udf89 Congratulations \u2014 you solved it in ') + formatTime(state.timer.elapsed) + '!';
+    els.congratsMessage.textContent = (usedHelp
+      ? 'You finished it \u2014 with a little help \u2014 in ' + formatTime(state.timer.elapsed) + '.'
+      : 'You solved this week\u2019s puzzle in ' + formatTime(state.timer.elapsed) + '.');
+    els.congratsModal.querySelector('.congrats-modal').classList.toggle('with-help', usedHelp);
+    els.congratsModal.hidden = false;
   }
 
   function formatTime(sec) {
@@ -506,7 +508,7 @@
     });
     state.solved = false;
     state.timer.elapsed = 0;
-    els.solvedBanner.hidden = true;
+    els.congratsModal.hidden = true;
     renderAllCells();
     renderTimer();
     state.currentIndex = puzzle.sequence[0].cell;
@@ -522,6 +524,11 @@
     els.helpBtn.addEventListener('click', function () { els.helpModal.hidden = false; });
     els.closeHelp.addEventListener('click', function () { els.helpModal.hidden = true; });
     els.helpModal.addEventListener('click', function (e) { if (e.target === els.helpModal) els.helpModal.hidden = true; });
+
+    els.closeCongrats.addEventListener('click', function () { els.congratsModal.hidden = true; focusInput(); });
+    els.congratsModal.addEventListener('click', function (e) {
+      if (e.target === els.congratsModal) { els.congratsModal.hidden = true; focusInput(); }
+    });
 
     els.dropdowns.forEach(function (dd) {
       var btn = dd.querySelector('.dropdown-trigger');
